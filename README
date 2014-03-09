@@ -1,0 +1,12 @@
+EZJACK: a simple wrapper for JACK to make stuff a bit easier
+by Ben "GreaseMonkey" Russell, 2014
+See "LICENCE" for the actual licence text (it's MIT).
+
+STATUS: Creates a client and ports and links them up. Does not actually handle audio yet.
+
+TODO:
+- Synchronous, streamed ezjack_write()/ezjack_read() calls (supporting deinterleaving)
+- Audio format conversion
+- Audio resampling
+- Callback support (which would ideally use ezjack_write / ezjack_read)
+

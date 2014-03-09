@@ -1,0 +1,13 @@
+# objects
+*.o
+*.so
+*.dll
+*.exe
+playez
+
+# VIM
+.*.swp
+
+# my fantastic coding ability
+*.core
+
