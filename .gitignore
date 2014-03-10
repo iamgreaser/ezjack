@@ -4,6 +4,7 @@
 *.dll
 *.exe
 playez
+recez
 
 # VIM
 .*.swp

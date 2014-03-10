@@ -34,29 +34,29 @@ THE SOFTWARE.
 #include <unistd.h>
 #include <fcntl.h>
 
-//define USE_CALLBACK
+#define USE_CALLBACK
 
-static int infp = -1;
+static int outfp = -1;
 
 #ifdef USE_CALLBACK
 static volatile int killme = 0;
 static int16_t cb_buf[1024*2];
 
-int playez_callback(int nframes_in, int nframes_out, ezjack_bundle_t *bun)
+int recez_callback(int nframes_in, int nframes_out, ezjack_bundle_t *bun)
 {
-	while(nframes_out > 0)
+	while(nframes_in > 0)
 	{
-		int len = (int)nframes_out;
+		int len = (int)nframes_in;
 		if(len > 1024)
 			len = 1024;
 
+		ezjack_read(bun, cb_buf, len*4, EZJackFormatS16LE);
+
 		// Note, not realtime so THIS IS A BAD IDEA
-		if(read(infp, (void *)cb_buf, len*4) == 0)
+		if(write(outfp, (void *)cb_buf, len*4) == 0)
 			killme = 1;
 
-		ezjack_write(bun, cb_buf, len*4, EZJackFormatS16LE);
-
-		nframes_out -= len;
+		nframes_in -= len;
 	}
 
 	return 0;
@@ -65,31 +65,30 @@ int playez_callback(int nframes_in, int nframes_out, ezjack_bundle_t *bun)
 
 int main(int argc, char *argv[])
 {
-	infp = STDIN_FILENO;
+	outfp = STDOUT_FILENO;
 	
-	if(argc > 1)
-		infp = open(argv[1], O_RDONLY);
+	//if(argc > 1)
+	//	outfp = open(argv[1], O_RDONLY);
 
-	ezjack_bundle_t *bun = ezjack_open("ezjack_test_play", 0, 2, 4096, 44100.0f, 0);
-	printf("returned %p (%i)\n", bun, ezjack_get_error());
+	ezjack_bundle_t *bun = ezjack_open("ezjack_test_rec", 2, 0, 4096, 44100.0f, 0);
+	fprintf(stderr, "rec open returned %p (%i)\n", bun, ezjack_get_error());
 
 	if(bun != NULL)
 	{
 		ezjack_activate(bun);
-		printf("autoconnect returned %i\n", ezjack_autoconnect(bun));
+		fprintf(stderr, "rec autoconnect returned %i\n", ezjack_autoconnect(bun));
 
 #ifdef USE_CALLBACK
-		printf("using callback API\n");
-		ezjack_set_callback(playez_callback);
+		fprintf(stderr, "rec using callback API\n");
+		ezjack_set_callback(recez_callback);
 		while(!killme) sleep(1);
 #else
-		printf("streaming directly\n");
+		fprintf(stderr, "rec streaming directly\n");
 		for(;;)
 		{
 			char buf[1024];
-			if(read(infp, buf, 1024) == 0)
-				break;
-			ezjack_write(bun, buf, 1024, EZJackFormatS16LE);
+			int len = ezjack_read(bun, buf, 1024, EZJackFormatS16LE);
+			write(outfp, buf, 1024);
 		}
 
 		sleep(1);
@@ -100,4 +99,5 @@ int main(int argc, char *argv[])
 
 	return 0;
 }
+
 

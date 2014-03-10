@@ -94,36 +94,18 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 		bun->fbuf = realloc(bun->fbuf, convsize*sizeof(float));
 	}
 
-	// Get smallest space count for writing to the output ringbuffer
-	int minwriteoutspace = sizeof(float) * bun->bufsize;
+#define HELPER_CALLBACK_GETSPACE(varname, vardef, foorb, foocount, jack_ringbuffer_foo_space) \
+	int varname = sizeof(float) * (vardef); \
+	for(i = 0; i < bun->portstack.foocount; i++) \
+	{ \
+		int cspace = (int)jack_ringbuffer_foo_space(bun->portstack.foorb[i]); \
+ \
+		if(cspace < varname) \
+			varname = cspace; \
+	} \
 
-	for(i = 0; i < bun->portstack.outcount; i++)
-	{
-		int cspace = (int)jack_ringbuffer_write_space(bun->portstack.outrb[i]);
-
-		if(cspace < minwriteoutspace)
-			minwriteoutspace = cspace;
-	}
-
-	// Call our callback
-	EZJackCallback cb = maincb;
-	if(cb != NULL)
-		// TODO: input
-		ret = cb(0, minwriteoutspace/sizeof(float), bun);
-
-	// Get smallest space count for reading from the output ringbuffer
-	int minoutspace = sizeof(float) * convsize;
-
-	for(i = 0; i < bun->portstack.outcount; i++)
-	{
-		int cspace = (int)jack_ringbuffer_read_space(bun->portstack.outrb[i]);
-
-		if(cspace < minoutspace)
-			minoutspace = cspace;
-	}
-
-
-	//printf("callback frames %i arg %p\n", nframes, bun);
+	// Get space for writing to input ringbuffer
+	//HELPER_CALLBACK_GETSPACE(minreadspace, bun->bufsize, inrb, incount, jack_ringbuffer_write_space);
 
 	// Inputs
 	for(i = 0; i < bun->portstack.incount; i++)
@@ -131,8 +113,31 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 		jack_port_t *p = bun->portstack.in[i];
 		jack_ringbuffer_t *rb = bun->portstack.inrb[i];
 		float *buf = jack_port_get_buffer(p, nframes);
-		// TODO: buffer this
+
+		// TODO: support other interpolations
+		int k = 0;
+		for(j = 0; j < nframes; j++)
+			for(; k < (j+1)*convgrad; k++)
+				bun->fbuf[k] = buf[j];
+
+		// An overrun can happen - in this case, it's the app's fault
+		jack_ringbuffer_write(rb, (char *)(bun->fbuf), convsize*sizeof(float));
 	}
+
+	// Get space for writing to output ringbuffer
+	HELPER_CALLBACK_GETSPACE(minwriteoutspace, bun->bufsize, outrb, outcount, jack_ringbuffer_write_space);
+
+	// Get space for reading from input ringbuffer
+	HELPER_CALLBACK_GETSPACE(minreadinspace, bun->bufsize, inrb, incount, jack_ringbuffer_read_space);
+
+	// Call our callback
+	EZJackCallback cb = maincb;
+	if(cb != NULL)
+		// TODO: input
+		ret = cb(minreadinspace/sizeof(float), minwriteoutspace/sizeof(float), bun);
+
+	// Get space for reading from output ringbuffer
+	HELPER_CALLBACK_GETSPACE(minoutspace, convsize, outrb, outcount, jack_ringbuffer_read_space);
 
 	// Outputs
 	for(i = 0; i < bun->portstack.outcount; i++)
@@ -274,6 +279,97 @@ int ezjack_deactivate(ezjack_bundle_t *bun)
 	return jack_deactivate(bun->client);
 }
 
+int ezjack_read(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
+{
+	int i, j;
+
+	int fmtsize = _helper_get_fmt_size(fmt); // FIXME: handle erroneous format
+	int blockalign = bun->portstack.incount * fmtsize;
+	if(len % blockalign != 0) abort(); // FIXME: do this more gracefully
+	int reqlen = len/blockalign;
+
+	while(reqlen > 0)
+	{
+		int minspace = reqlen * sizeof(float);
+
+		// Get smallest space count
+		for(i = 0; i < bun->portstack.incount; i++)
+		{
+			int cspace = (int)jack_ringbuffer_read_space(bun->portstack.inrb[i]);
+
+			if(cspace < minspace)
+				minspace = cspace;
+		}
+
+		minspace /= sizeof(float);
+		//fprintf(stderr, "minspace %i\n", minspace);
+
+		// Read from ring buffers
+		if(minspace > 0)
+		{
+			// Fetch data
+			for(i = 0; i < bun->portstack.incount; i++)
+			{
+				// FIXME: handle the case where this returns something wrong
+				jack_ringbuffer_read(bun->portstack.inrb[i], (char *)(bun->portstack.inbuf[i]), minspace*sizeof(float));
+			}
+
+			// Read from temporaries
+			// FIXME: handle all formats
+#define HELPER_READ_FORMAT(typ, low, high, wrap) \
+			for(j = 0; j < minspace; j++) \
+				for(i = 0; i < bun->portstack.incount; i++) \
+				{ \
+					float v = (bun->portstack.inbuf[i][j]); \
+ \
+					*(typ *)buf = (v <= -1.0f ? low : \
+						(v >= 1.0f ? high : (typ)(wrap)) \
+							); \
+ \
+					buf += sizeof(typ); \
+				} \
+
+			switch(fmt)
+			{
+				case EZJackFormatFloat32LE:
+				case EZJackFormatFloat32Native:
+					HELPER_READ_FORMAT(float, -1.0f, 1.0f, v);
+					break;
+
+				case EZJackFormatU8:
+					HELPER_READ_FORMAT(uint8_t, 0, 255, (v+1.0f)*127.0f);
+					break;
+
+				case EZJackFormatS8:
+					HELPER_READ_FORMAT(int8_t, -128, 127, v*127.0f);
+					break;
+
+				case EZJackFormatS16Native:
+				case EZJackFormatS16LE:
+					HELPER_READ_FORMAT(uint16_t, -32768, 32767, v*32767.0f);
+					break;
+
+				case EZJackFormatU16Native:
+				case EZJackFormatU16LE:
+					HELPER_READ_FORMAT(int16_t, 0, 65535, (v+1.0f)*32767.0f);
+					break;
+
+			}
+
+#undef HELPER_READ_FORMAT
+
+			reqlen -= minspace;
+		}
+
+		// Sleep a bit.
+		// TODO: use a notify system
+		usleep(1000);
+	}
+
+	return len;
+}
+
+// TODO: nonblocking version
 int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
 {
 	int i, j;
@@ -303,7 +399,7 @@ int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
 		{
 			// Write to temporaries
 			// FIXME: handle all formats
-#define HELPER_HANDLE_FORMAT(inc, wrap) \
+#define HELPER_WRITE_FORMAT(inc, wrap) \
 			for(j = 0; j < minspace; j++) \
 				for(i = 0; i < bun->portstack.outcount; i++) \
 				{ \
@@ -315,30 +411,30 @@ int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
 			{
 				case EZJackFormatFloat32LE:
 				case EZJackFormatFloat32Native:
-					HELPER_HANDLE_FORMAT(sizeof(float), *(float *)buf);
+					HELPER_WRITE_FORMAT(sizeof(float), *(float *)buf);
 					break;
 
 				case EZJackFormatU8:
-					HELPER_HANDLE_FORMAT(1, ((float)*(uint8_t *)buf)/128.0f-1.0f);
+					HELPER_WRITE_FORMAT(1, ((float)*(uint8_t *)buf)/128.0f-1.0f);
 					break;
 
 				case EZJackFormatS8:
-					HELPER_HANDLE_FORMAT(1, ((float)*(int8_t *)buf)/128.0f);
+					HELPER_WRITE_FORMAT(1, ((float)*(int8_t *)buf)/128.0f);
 					break;
 
 				case EZJackFormatS16Native:
 				case EZJackFormatS16LE:
-					HELPER_HANDLE_FORMAT(2, ((float)*(int16_t *)buf)/32768.0f);
+					HELPER_WRITE_FORMAT(2, ((float)*(int16_t *)buf)/32768.0f);
 					break;
 
 				case EZJackFormatU16Native:
 				case EZJackFormatU16LE:
-					HELPER_HANDLE_FORMAT(2, ((float)*(uint16_t *)buf)/32768.0f-1.0f);
+					HELPER_WRITE_FORMAT(2, ((float)*(uint16_t *)buf)/32768.0f-1.0f);
 					break;
 
 			}
 
-#undef HELPER_HANDLE_FORMAT
+#undef HELPER_WRITE_FORMAT
 
 			// Commit data
 			for(i = 0; i < bun->portstack.outcount; i++)
@@ -355,7 +451,7 @@ int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
 		usleep(1000);
 	}
 
-	return 0;
+	return len;
 }
 
 

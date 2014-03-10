@@ -2,10 +2,10 @@ EZJACK: a simple wrapper for JACK to make stuff a bit easier
 by Ben "GreaseMonkey" Russell, 2014
 See "LICENCE" for the actual licence text (it's MIT).
 
-STATUS: Can play audio. Can't record yet.
+STATUS: Can play audio. Can record.
 
 WARNING: THIS API IS VERY VOLATILE AND CAN CHANGE ENTIRELY.
 
 TODO:
-- Record support
+- Stabilise the API a bit.
 
