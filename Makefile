@@ -2,8 +2,8 @@
 
 LIBS_CORE = -L/usr/local/lib
 LIBS = -L/usr/local/lib -L. -Wl,-rpath,. -lezjack -ljack
-CFLAGS_CORE = -I/usr/local/include
-CFLAGS = -I/usr/local/include -I.
+CFLAGS_CORE = -g -I/usr/local/include
+CFLAGS = -g -I/usr/local/include -I.
 
 all: libezjack.so playez
 

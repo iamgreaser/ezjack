@@ -32,9 +32,44 @@ THE SOFTWARE.
 #include <ezjack.h>
 
 #include <unistd.h>
+#include <fcntl.h>
+
+#define USE_CALLBACK
+
+static int infp = -1;
+
+#ifdef USE_CALLBACK
+static volatile int killme = 0;
+static int16_t cb_buf[1024*2];
+
+int playez_callback(int nframes_in, int nframes_out, ezjack_bundle_t *bun)
+{
+	while(nframes_out > 0)
+	{
+		int len = (int)nframes_out;
+		if(len > 1024)
+			len = 1024;
+
+		// Note, not realtime so THIS IS A BAD IDEA
+		if(read(infp, (void *)cb_buf, len*4) == 0)
+			killme = 1;
+
+		ezjack_write(bun, cb_buf, len*4, EZJackFormatS16LE);
+
+		nframes_out -= len;
+	}
+
+	return 0;
+}
+#endif
 
 int main(int argc, char *argv[])
 {
+	infp = STDIN_FILENO;
+	
+	if(argc > 1)
+		infp = open(argv[1], O_RDONLY);
+
 	ezjack_bundle_t *bun = ezjack_open("ezjack_test", 0, 2, 4096, 44100.0f, 0);
 	printf("returned %p (%i)\n", bun, ezjack_get_error());
 
@@ -43,14 +78,23 @@ int main(int argc, char *argv[])
 		ezjack_activate(bun);
 		printf("autoconnect returned %i\n", ezjack_autoconnect(bun));
 
+#ifdef USE_CALLBACK
+		printf("using callback API\n");
+		ezjack_set_callback(playez_callback);
+		while(!killme) sleep(1);
+#else
+		printf("streaming directly\n");
 		for(;;)
 		{
 			char buf[1024];
-			read(STDIN_FILENO, buf, 1024);
+			if(read(infp, buf, 1024) == 0)
+				break;
 			ezjack_write(bun, buf, 1024, EZJackFormatS16LE);
 		}
 
-		sleep(3);
+		sleep(1);
+#endif
+
 		ezjack_close(bun);
 	}
 

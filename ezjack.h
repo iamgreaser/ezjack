@@ -77,6 +77,8 @@ typedef struct EZJackBundle
 	int fbuflen;
 } ezjack_bundle_t;
 
+typedef int (*EZJackCallback)(int nframes_in, int nframes_out, ezjack_bundle_t *bun);
+
 jack_status_t ezjack_get_error(void);
 
 ezjack_bundle_t *ezjack_open(const char *client_name, int inputs, int outputs, int bufsize, float freq, ezjack_portflags_t flags);
@@ -84,6 +86,7 @@ int ezjack_autoconnect(ezjack_bundle_t *bun);
 void ezjack_close(ezjack_bundle_t *bun);
 int ezjack_activate(ezjack_bundle_t *bun);
 int ezjack_deactivate(ezjack_bundle_t *bun);
+int ezjack_set_callback(EZJackCallback cb);
 int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt);
 
 #endif /* ifndef _EZJACK_H_ */

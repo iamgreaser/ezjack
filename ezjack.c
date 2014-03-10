@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include "ezjack.h"
 
 static volatile jack_status_t lasterr = 0;
+static volatile EZJackCallback maincb = NULL;
 
 static int _helper_get_fmt_size(ezjack_format_t fmt)
 {
@@ -69,9 +70,16 @@ jack_status_t ezjack_get_error(void)
 	return ret;
 }
 
+int ezjack_set_callback(EZJackCallback cb)
+{
+	maincb = cb;
+	return 0;
+}
+
 int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 {
 	int i, j;
+	int ret = 0;
 	ezjack_bundle_t *bun = (ezjack_bundle_t *)arg;
 
 	// Sample rate
@@ -86,6 +94,35 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 		bun->fbuf = realloc(bun->fbuf, convsize*sizeof(float));
 	}
 
+	// Get smallest space count for writing to the output ringbuffer
+	int minwriteoutspace = sizeof(float) * bun->bufsize;
+
+	for(i = 0; i < bun->portstack.outcount; i++)
+	{
+		int cspace = (int)jack_ringbuffer_write_space(bun->portstack.outrb[i]);
+
+		if(cspace < minwriteoutspace)
+			minwriteoutspace = cspace;
+	}
+
+	// Call our callback
+	EZJackCallback cb = maincb;
+	if(cb != NULL)
+		// TODO: input
+		ret = cb(0, minwriteoutspace/sizeof(float), bun);
+
+	// Get smallest space count for reading from the output ringbuffer
+	int minoutspace = sizeof(float) * convsize;
+
+	for(i = 0; i < bun->portstack.outcount; i++)
+	{
+		int cspace = (int)jack_ringbuffer_read_space(bun->portstack.outrb[i]);
+
+		if(cspace < minoutspace)
+			minoutspace = cspace;
+	}
+
+
 	//printf("callback frames %i arg %p\n", nframes, bun);
 
 	// Inputs
@@ -95,17 +132,6 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 		jack_ringbuffer_t *rb = bun->portstack.inrb[i];
 		float *buf = jack_port_get_buffer(p, nframes);
 		// TODO: buffer this
-	}
-
-	// Get smallest space count
-	int minoutspace = sizeof(float) * convsize;
-
-	for(i = 0; i < bun->portstack.outcount; i++)
-	{
-		int cspace = (int)jack_ringbuffer_read_space(bun->portstack.outrb[i]);
-
-		if(cspace < minoutspace)
-			minoutspace = cspace;
 	}
 
 	// Outputs
@@ -122,7 +148,7 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 			buf[j] = bun->fbuf[(int)(j*convgrad)];
 	}
 
-	return 0;
+	return ret;
 }
 
 ezjack_bundle_t *ezjack_open(const char *client_name, int inputs, int outputs, int bufsize, float freq, ezjack_portflags_t flags)
