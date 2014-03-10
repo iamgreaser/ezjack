@@ -59,6 +59,8 @@ typedef struct EZJackPortStack
 	jack_port_t *out[EZJACK_PORTSTACK_MAX];
 	jack_ringbuffer_t *inrb[EZJACK_PORTSTACK_MAX];
 	jack_ringbuffer_t *outrb[EZJACK_PORTSTACK_MAX];
+
+	// leave this section alone
 	float *inbuf[EZJACK_PORTSTACK_MAX];
 	float *outbuf[EZJACK_PORTSTACK_MAX];
 } ezjack_portstack_t;
@@ -69,6 +71,10 @@ typedef struct EZJackBundle
 	ezjack_portstack_t portstack;
 	int bufsize;
 	float freq;
+
+	// leave this section alone
+	float *fbuf;
+	int fbuflen;
 } ezjack_bundle_t;
 
 jack_status_t ezjack_get_error(void);

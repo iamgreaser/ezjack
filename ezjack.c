@@ -74,6 +74,18 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 	int i, j;
 	ezjack_bundle_t *bun = (ezjack_bundle_t *)arg;
 
+	// Sample rate
+	float sfreq = jack_get_sample_rate(bun->client);
+
+	float convgrad = (bun->freq/sfreq);
+	int convsize = nframes * convgrad;
+
+	if(bun->fbuflen != convsize)
+	{
+		bun->fbuflen = convsize;
+		bun->fbuf = realloc(bun->fbuf, convsize*sizeof(float));
+	}
+
 	//printf("callback frames %i arg %p\n", nframes, bun);
 
 	// Inputs
@@ -86,7 +98,7 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 	}
 
 	// Get smallest space count
-	int minoutspace = sizeof(float) * nframes;
+	int minoutspace = sizeof(float) * convsize;
 
 	for(i = 0; i < bun->portstack.outcount; i++)
 	{
@@ -103,8 +115,11 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 		jack_ringbuffer_t *rb = bun->portstack.outrb[i];
 		float *buf = jack_port_get_buffer(p, nframes);
 
-		// TODO: frequency translation
-		jack_ringbuffer_read(rb, (float *)buf, minoutspace);
+		jack_ringbuffer_read(rb, (char *)(bun->fbuf), minoutspace);
+		
+		// TODO: support other interpolations
+		for(j = 0; j < nframes; j++)
+			buf[j] = bun->fbuf[(int)(j*convgrad)];
 	}
 
 	return 0;
@@ -126,6 +141,8 @@ ezjack_bundle_t *ezjack_open(const char *client_name, int inputs, int outputs, i
 	
 	bun.freq = freq;
 	bun.bufsize = bufsize;
+	bun.fbuflen = 0;
+	bun.fbuf = NULL;
 	
 	// Create some ports
 	bun.portstack.incount = 0;
@@ -197,7 +214,27 @@ int ezjack_autoconnect(ezjack_bundle_t *bun)
 
 void ezjack_close(ezjack_bundle_t *bun)
 {
+	int i;
+
+	jack_deactivate(bun->client);
+
+	for(i = 0; i < bun->portstack.incount; i++)
+	{
+		jack_ringbuffer_free(bun->portstack.inrb[i]);
+		free(bun->portstack.inbuf[i]);
+	}
+
+	for(i = 0; i < bun->portstack.outcount; i++)
+	{
+		jack_ringbuffer_free(bun->portstack.outrb[i]);
+		free(bun->portstack.outbuf[i]);
+	}
+
+	if(bun->fbuf != NULL)
+		free(bun->fbuf);
+
 	jack_client_close(bun->client);
+
 	free(bun);
 }
 
@@ -281,7 +318,7 @@ int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
 			for(i = 0; i < bun->portstack.outcount; i++)
 			{
 				// FIXME: handle the case where this returns something wrong
-				jack_ringbuffer_write(bun->portstack.outrb[i], bun->portstack.outbuf[i], minspace*sizeof(float));
+				jack_ringbuffer_write(bun->portstack.outrb[i], (char *)(bun->portstack.outbuf[i]), minspace*sizeof(float));
 			}
 
 			reqlen -= minspace;
