@@ -24,25 +24,51 @@ THE SOFTWARE.
 #ifndef _EZJACK_H_
 #define _EZJACK_H_
 #include <jack/jack.h>
+#include <jack/ringbuffer.h>
+
+typedef enum EZJackFormats
+{
+	EZJackFormatFloat32Native,
+	EZJackFormatFloat32LE,
+	EZJackFormatFloat32BE,
+
+	EZJackFormatU8,
+	EZJackFormatS8,
+
+	EZJackFormatS16Native,
+	EZJackFormatS16LE,
+	EZJackFormatS16BE,
+
+	EZJackFormatU16Native,
+	EZJackFormatU16LE,
+	EZJackFormatU16BE,
+} ezjack_format_t;
 
 typedef enum EZJackPortFlags
 {
 	// Nothing here yet.
+	ThisOnlyExistsBecauseCDoesntLikeAnEmptyEnum,
 } ezjack_portflags_t;
 
 #define EZJACK_PORTSTACK_MAX 32
+#define EZJACK_RB_SIZE ((1<<17)*sizeof(float))
 typedef struct EZJackPortStack
 {
 	int incount, outcount;
 	jack_port_t *in[EZJACK_PORTSTACK_MAX];
 	jack_port_t *out[EZJACK_PORTSTACK_MAX];
+	jack_ringbuffer_t *inrb[EZJACK_PORTSTACK_MAX];
+	jack_ringbuffer_t *outrb[EZJACK_PORTSTACK_MAX];
+	float *inbuf[EZJACK_PORTSTACK_MAX];
+	float *outbuf[EZJACK_PORTSTACK_MAX];
 } ezjack_portstack_t;
 
 typedef struct EZJackBundle
 {
 	jack_client_t *client;
-	float freq;
 	ezjack_portstack_t portstack;
+	int bufsize;
+	float freq;
 } ezjack_bundle_t;
 
 jack_status_t ezjack_get_error(void);
@@ -52,6 +78,7 @@ int ezjack_autoconnect(ezjack_bundle_t *bun);
 void ezjack_close(ezjack_bundle_t *bun);
 int ezjack_activate(ezjack_bundle_t *bun);
 int ezjack_deactivate(ezjack_bundle_t *bun);
+int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt);
 
 #endif /* ifndef _EZJACK_H_ */
 

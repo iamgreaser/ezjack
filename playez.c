@@ -35,14 +35,22 @@ THE SOFTWARE.
 
 int main(int argc, char *argv[])
 {
-	ezjack_bundle_t *bun = ezjack_open("ezjack_test", 2, 2, 1024, 44100.0f, 0);
+	ezjack_bundle_t *bun = ezjack_open("ezjack_test", 0, 2, 4096, 44100.0f, 0);
 	printf("returned %p (%i)\n", bun, ezjack_get_error());
 
 	if(bun != NULL)
 	{
 		ezjack_activate(bun);
 		printf("autoconnect returned %i\n", ezjack_autoconnect(bun));
-		sleep(5);
+
+		for(;;)
+		{
+			char buf[1024];
+			read(STDIN_FILENO, buf, 1024);
+			ezjack_write(bun, buf, 1024, EZJackFormatS16LE);
+		}
+
+		sleep(3);
 		ezjack_close(bun);
 	}
 

@@ -27,11 +27,39 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <errno.h>
 
+#include <unistd.h> /* usleep(3) */
+
 #include <jack/jack.h>
+#include <jack/ringbuffer.h>
 
 #include "ezjack.h"
 
 static volatile jack_status_t lasterr = 0;
+
+static int _helper_get_fmt_size(ezjack_format_t fmt)
+{
+	switch(fmt)
+	{
+		case EZJackFormatFloat32Native:
+		case EZJackFormatFloat32LE:
+		case EZJackFormatFloat32BE:
+			return 4;
+
+		case EZJackFormatU8:
+		case EZJackFormatS8:
+			return 1;
+
+		case EZJackFormatS16Native:
+		case EZJackFormatS16LE:
+		case EZJackFormatS16BE:
+		case EZJackFormatU16Native:
+		case EZJackFormatU16LE:
+		case EZJackFormatU16BE:
+			return 2;
+	}
+
+	return 0; // invalid
+}
 
 jack_status_t ezjack_get_error(void)
 {
@@ -39,6 +67,47 @@ jack_status_t ezjack_get_error(void)
 	jack_status_t ret = lasterr;
 	lasterr = 0;
 	return ret;
+}
+
+int ezjack_default_callback(jack_nframes_t nframes, void *arg)
+{
+	int i, j;
+	ezjack_bundle_t *bun = (ezjack_bundle_t *)arg;
+
+	//printf("callback frames %i arg %p\n", nframes, bun);
+
+	// Inputs
+	for(i = 0; i < bun->portstack.incount; i++)
+	{
+		jack_port_t *p = bun->portstack.in[i];
+		jack_ringbuffer_t *rb = bun->portstack.inrb[i];
+		float *buf = jack_port_get_buffer(p, nframes);
+		// TODO: buffer this
+	}
+
+	// Get smallest space count
+	int minoutspace = sizeof(float) * nframes;
+
+	for(i = 0; i < bun->portstack.outcount; i++)
+	{
+		int cspace = (int)jack_ringbuffer_read_space(bun->portstack.outrb[i]);
+
+		if(cspace < minoutspace)
+			minoutspace = cspace;
+	}
+
+	// Outputs
+	for(i = 0; i < bun->portstack.outcount; i++)
+	{
+		jack_port_t *p = bun->portstack.out[i];
+		jack_ringbuffer_t *rb = bun->portstack.outrb[i];
+		float *buf = jack_port_get_buffer(p, nframes);
+
+		// TODO: frequency translation
+		jack_ringbuffer_read(rb, (float *)buf, minoutspace);
+	}
+
+	return 0;
 }
 
 ezjack_bundle_t *ezjack_open(const char *client_name, int inputs, int outputs, int bufsize, float freq, ezjack_portflags_t flags)
@@ -56,12 +125,13 @@ ezjack_bundle_t *ezjack_open(const char *client_name, int inputs, int outputs, i
 		return NULL;
 	
 	bun.freq = freq;
+	bun.bufsize = bufsize;
 	
 	// Create some ports
 	bun.portstack.incount = 0;
 	bun.portstack.outcount = 0;
 
-#define HELPER_OPEN_PORTS(foo, fooputs, foocount, foofmt, flags) \
+#define HELPER_OPEN_PORTS(foo, fooputs, foocount, foorb, foobuf, foofmt, flags) \
 	for(i = 0; i < fooputs; i++) \
 	{ \
 		snprintf(namebuf, 16, foofmt, i+1); \
@@ -73,17 +143,24 @@ ezjack_bundle_t *ezjack_open(const char *client_name, int inputs, int outputs, i
 			return NULL; \
 		} \
  \
+		bun.portstack.foorb[i] = jack_ringbuffer_create(bufsize*sizeof(float)); \
+		bun.portstack.foobuf[i] = malloc(bufsize*sizeof(float)); \
+ \
 		bun.portstack.foocount++; \
 	}
 
-	HELPER_OPEN_PORTS(in, inputs, incount, "in_%i", JackPortIsInput);
-	HELPER_OPEN_PORTS(out, outputs, outcount, "out_%i", JackPortIsOutput);
+	HELPER_OPEN_PORTS(in, inputs, incount, inrb, inbuf, "in_%i", JackPortIsInput);
+	HELPER_OPEN_PORTS(out, outputs, outcount, outrb, outbuf, "out_%i", JackPortIsOutput);
 
 #undef HELPER_OPEN_PORTS
 
-	// Return our bundle
+	// Prepare our bundle
 	ezjack_bundle_t *ret = malloc(sizeof(ezjack_bundle_t));
 	memcpy(ret, &bun, sizeof(ezjack_bundle_t));
+
+	// Set callback
+	// FIXME: error needs to be acted upon
+	jack_set_process_callback(bun.client, ezjack_default_callback, ret);
 
 	return ret;
 }
@@ -133,4 +210,89 @@ int ezjack_deactivate(ezjack_bundle_t *bun)
 {
 	return jack_deactivate(bun->client);
 }
+
+int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
+{
+	int i, j;
+
+	int fmtsize = _helper_get_fmt_size(fmt); // FIXME: handle erroneous format
+	int blockalign = bun->portstack.outcount * fmtsize;
+	if(len % blockalign != 0) abort(); // FIXME: do this more gracefully
+	int reqlen = len/blockalign;
+
+	while(reqlen > 0)
+	{
+		int minspace = reqlen * sizeof(float);
+
+		// Get smallest space count
+		for(i = 0; i < bun->portstack.outcount; i++)
+		{
+			int cspace = (int)jack_ringbuffer_write_space(bun->portstack.outrb[i]);
+
+			if(cspace < minspace)
+				minspace = cspace;
+		}
+
+		minspace /= sizeof(float);
+
+		// Write to ring buffers
+		if(minspace > 0)
+		{
+			// Write to temporaries
+			// FIXME: handle all formats
+#define HELPER_HANDLE_FORMAT(inc, wrap) \
+			for(j = 0; j < minspace; j++) \
+				for(i = 0; i < bun->portstack.outcount; i++) \
+				{ \
+					bun->portstack.outbuf[i][j] = wrap; \
+					buf += inc; \
+				} \
+
+			switch(fmt)
+			{
+				case EZJackFormatFloat32LE:
+				case EZJackFormatFloat32Native:
+					HELPER_HANDLE_FORMAT(sizeof(float), *(float *)buf);
+					break;
+
+				case EZJackFormatU8:
+					HELPER_HANDLE_FORMAT(1, ((float)*(uint8_t *)buf)/128.0f-1.0f);
+					break;
+
+				case EZJackFormatS8:
+					HELPER_HANDLE_FORMAT(1, ((float)*(int8_t *)buf)/128.0f);
+					break;
+
+				case EZJackFormatS16Native:
+				case EZJackFormatS16LE:
+					HELPER_HANDLE_FORMAT(2, ((float)*(int16_t *)buf)/32768.0f);
+					break;
+
+				case EZJackFormatU16Native:
+				case EZJackFormatU16LE:
+					HELPER_HANDLE_FORMAT(2, ((float)*(uint16_t *)buf)/32768.0f-1.0f);
+					break;
+
+			}
+
+#undef HELPER_HANDLE_FORMAT
+
+			// Commit data
+			for(i = 0; i < bun->portstack.outcount; i++)
+			{
+				// FIXME: handle the case where this returns something wrong
+				jack_ringbuffer_write(bun->portstack.outrb[i], bun->portstack.outbuf[i], minspace*sizeof(float));
+			}
+
+			reqlen -= minspace;
+		}
+
+		// Sleep a bit.
+		// TODO: use a notify system
+		usleep(1000);
+	}
+
+	return 0;
+}
+
 
