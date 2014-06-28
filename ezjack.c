@@ -85,7 +85,7 @@ int ezjack_default_callback(jack_nframes_t nframes, void *arg)
 	// Sample rate
 	float sfreq = jack_get_sample_rate(bun->client);
 
-	float convgrad = (bun->freq/sfreq);
+	float convgrad = (bun->freq/sfreq) - 0.00001f;
 	int convsize = nframes * convgrad;
 
 	if(bun->fbuflen != convsize)
@@ -370,7 +370,7 @@ int ezjack_read(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
 }
 
 // TODO: nonblocking version
-int ezjack_write(ezjack_bundle_t *bun, const void *buf, int len, ezjack_format_t fmt)
+int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt)
 {
 	int i, j;
 

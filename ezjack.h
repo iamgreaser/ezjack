@@ -88,7 +88,7 @@ int ezjack_activate(ezjack_bundle_t *bun);
 int ezjack_deactivate(ezjack_bundle_t *bun);
 int ezjack_set_callback(EZJackCallback cb);
 int ezjack_read(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt);
-int ezjack_write(ezjack_bundle_t *bun, const void *buf, int len, ezjack_format_t fmt);
+int ezjack_write(ezjack_bundle_t *bun, void *buf, int len, ezjack_format_t fmt);
 
 #endif /* ifndef _EZJACK_H_ */
 
